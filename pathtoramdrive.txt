@@ -1,0 +1,2 @@
+/var/tmp2 
+#4mb of storage, /etc/fstab to modify amount
