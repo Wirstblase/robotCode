@@ -1,0 +1,425 @@
+#include <SoftwareSerial.h>
+#include <Servo.h>
+#include <String.h>
+Servo ESC; // 0 = brake, 40 = reverse, 50 = off, 60-100=fwdspeed
+Servo steering; // 113 = left, 77 = right, 96 = middle
+int pos = 0; //sets position variable (ESC)
+byte number = 0;
+
+const int left = 113;
+const int middle = 96; //coord pt servo pt viraj
+const int right = 77;
+int currentAngle = middle;
+
+const int baud = 19200;
+
+const int in1 = 6; //ESC POWER
+const int in2 = 7; //RASPBERRY POWER
+const int in3 = 8; //IR Lights
+const int in4 = 4; //Module Toggle
+
+SoftwareSerial arduino2(3, 2); // RX, TX
+
+char data = 0;
+char data2 = 0;
+/*
+   w = forward
+   a = left
+   d = right
+   s = brake/reverse
+   x = brake only
+   z = neutral (steering)
+   0-9 = speed control
+*/
+int obstacleInFront = 0;
+int obstacleBehind = 0;
+
+int stop = 0;
+int fwd = 55;
+
+int led = 12;
+int dif = 5;
+
+bool goingForward = false;
+bool goingBack = false;
+
+void arm() {
+
+  delay(2000);
+  setSpeed(0); //Sets speed zero
+  delay(1000);
+  setSpeed(0);
+
+}
+
+void setup()
+{
+  Serial.begin(baud);
+  //while (!Serial) {
+  //  ; // wait for serial port to connect. Needed for native USB port only
+  //}
+  Serial.println("y");
+  arduino2.begin(baud);
+  ESC.attach(11); //ESC PIN
+  steering.attach(10); //servo data pin
+
+  tone(dif, 800, 50);
+  delay(100);
+  tone(dif, 800, 50);
+
+  pinMode(in1, OUTPUT);
+  digitalWrite(in1, HIGH);
+
+  pinMode(in2, OUTPUT);
+  digitalWrite(in2, HIGH);
+
+  pinMode(in3, OUTPUT);
+  digitalWrite(in3, HIGH);
+
+  pinMode(in4, OUTPUT);
+  digitalWrite(in4, HIGH);
+
+  digitalWrite(in1, LOW); //porneste motorul (esc-ul)
+
+  arm();
+  delay(100); //armeaza esc-ul inainte sa porneasca raspberry-ul pentru orice eventualitate
+  
+  digitalWrite(in2, LOW); //porneste raspberry
+
+  digitalWrite(in3, LOW);  //Testeaza luminile pentru o secunda, la pornire
+  delay(1000);
+  digitalWrite(in3, HIGH);
+
+  digitalWrite(in4, LOW);
+  delay(100);
+  digitalWrite(in4, HIGH);
+
+  
+  //setSpeed(50); //dintr-un motiv sau altul esc-ul nu se mai armeaza, this should solve it (50 = speed ZERO)
+}
+
+void setSpeed(int speed) {
+
+  int angle = map(speed, 0, 100, 0, 180); //Sets servo positions to different speeds
+  ESC.write(angle);
+
+}
+
+void brake() {
+  int speed;
+  tone(dif, 300, 200);
+  fwd = 50;
+  speed = fwd;
+  setSpeed(speed);
+
+  goingForward = false;
+}
+
+void goForward() {
+
+  if (obstacleInFront == 0)
+  {
+    tone(dif, 800, 100);
+    sendSpeed();
+    goingForward = true;
+  }
+
+  else {
+    brake();
+  }
+}
+
+
+void frontObstacleDetected() {
+  obstacleInFront = 1;
+  goingForward = false;
+  arduino2.write('n');
+}
+void backObstacleDetected() {
+  obstacleBehind = 1;
+  goingBack = false;
+  arduino2.write('N');
+}
+
+void goLeft() {  // 113 = left, 77 = right, 96 = middle
+  currentAngle = currentAngle + 5;
+  if(currentAngle > left){
+    currentAngle = left;
+    tone(dif, 440, 50);
+    }
+  steering.write(currentAngle);
+}
+
+void goRight() {
+  currentAngle = currentAngle - 5;
+  if(currentAngle < right){
+    currentAngle = right;
+    tone(dif, 440, 50);
+    }
+  steering.write(currentAngle);
+}
+
+void goBack() {     //check
+  int speed;
+  if (!goingForward)
+  {
+    if (obstacleBehind == 0)
+    {
+      tone(dif, 800, 100);
+      fwd = 40;
+      speed = fwd;
+      setSpeed(speed);
+      goingBack = true;
+    }
+
+    else {
+      brake();
+    }
+  }
+  else
+  {
+    brake();
+  }
+
+}
+
+void sendSpeed() {  
+  int speed;
+  speed = fwd;
+  setSpeed(speed);
+}
+
+void writeString(String stringData) { // Used to serially push out a String with Serial.write()    //DEPRECATED
+
+  for (int i = 0; i < stringData.length(); i++)
+  {
+    Serial.write(stringData[i]);   // Push each char 1 by 1 on each loop pass
+  }
+
+}// end writeString
+
+String stringread;
+
+void customReadString(){   //DEPRECATED
+
+char received = ' '; 
+
+  int k=0,i=0;
+  
+  while(k==0){
+    received = Serial.read();
+    stringread[i] = received;
+    if (received=='N'){
+    k=1;}
+    i++;
+  }
+  
+}
+
+void loop()  //check
+{
+  int speed;
+
+  if (Serial.available() > 0)
+  {
+    data = Serial.read();
+    Serial.print(data);
+    Serial.print("\n");
+    if (data == 'w') {
+      arduino2.write('c'); //Ask Arduino2 if there is an obstacle IN FRONT
+      //data = Serial.read();
+      goForward();
+    }
+    else if (data == 'a')
+    {
+      goLeft();
+      if (goingForward || goingBack)
+        sendSpeed();
+    }
+    else if (data == 's')
+    {
+      arduino2.write('z'); //Ask Arduino2 if there is an obstacle BEHIND
+      goBack();
+    }
+    else if (data == 'd')
+    {
+      goRight();
+      if (goingForward || goingBack)
+        sendSpeed();
+    }
+    else if (data == 'h')
+    {
+      //String dat;
+      Serial.write('h');
+      arduino2.write('h');
+      arduino2.listen();
+      //dat = arduino2.readString();
+      customReadString();
+      //Serial.println(dat);
+      writeString(stringread);
+      tone(dif, 1000, 60);
+      //enginetemp distance1,2,3 battery, sensorsConnected, rotx,y,z, caseTemp, goingForward, turbineRPM, distanceBasedOnSpeed
+    }
+    
+    else if (data == 't') { //turns on IR LIGHTS
+      digitalWrite(in3, LOW);
+    }
+    else if (data == 'T') { //turns off IR LIGHTS
+      digitalWrite(in3, HIGH);
+    }
+    else if (data == 'b') { //toggles module on
+      digitalWrite(in4, LOW);
+    }
+    else if (data == 'B') { //toggles module off
+      digitalWrite(in4, HIGH);
+    }
+    else if (data == 'g') { //toggles engine on
+      digitalWrite(in1, LOW);
+    }
+    else if (data == 'G') { //toggles engine off
+      digitalWrite(in1, HIGH);
+    }
+
+    else if (data == '*') { 
+      arduino2.write('*');
+    }
+    else if (data == '@') { 
+      arduino2.write('@');
+    }
+
+    else if (data == '0') {
+      fwd = 50;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('0');
+    }
+    else if (data == '1') {
+      fwd = 55;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('1');
+    }
+    else if (data == '2') {
+      fwd = 60;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('2');
+    }
+    else if (data == '3') {
+      fwd = 65;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('3');
+    }
+    else if (data == '4') {
+      fwd = 70;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('4');
+    }
+    else if (data == '5') {
+      fwd = 75;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('5');
+    }
+    else if (data == '6') {
+      fwd = 80;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('6');
+    }
+    else if (data == '7') {
+      fwd = 85;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('7');
+    }
+    else if (data == '8') {
+      speed = 90;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('8');
+    }
+    else if (data == '9') {
+      speed = 100;
+      if (goingForward)
+        sendSpeed();
+      arduino2.write('9');
+    }
+    else if (data == 'x') {
+      steering.write(middle);
+      brake();
+    }
+    else if (data == 'z') {
+      currentAngle = middle;
+      steering.write(currentAngle);
+      if (goingForward)
+        sendSpeed();
+    }/*
+     Serial.end();
+     delay(20);
+     Serial.begin(baud);*/
+
+  }
+
+  arduino2.listen();
+  if (arduino2.available() > 0)
+  {                                       //check
+    data2 = ' ';
+    data2 = arduino2.read();
+
+    if (data2 == 'i') {
+      obstacleInFront = 0;
+    }
+    else if (data2 == 'o')
+    {
+      obstacleInFront = 1;
+    }
+
+    else if (data2 == 'l') 
+    {
+      obstacleBehind = 0;
+    }
+    else if (data2 == 'k') 
+    {
+      obstacleBehind = 1;
+    }
+
+    else if (data2 == 'm')
+    {
+      digitalWrite(in1, HIGH);
+      tone(dif, 500, 200);
+    }
+    else if (data2 == 'n')
+    {
+      digitalWrite(in1, LOW);
+      tone(dif, 800, 200);
+    }
+    else if (data2 == 'u') //u intreaba daca merge in fata                //check
+      {
+        if (goingForward == 1)
+          arduino2.write('y');
+        else
+          arduino2.write('n');
+      }
+    else if (data2 == 'U') //U intreaba daca merge in spate                  //check
+    {
+      if (goingBack == 1)
+        arduino2.write('Y');
+      else
+        arduino2.write('N'); //CHECK CHECK CHECK (inainte era Y)
+    }
+
+    //data2 = arduino2.read(); //CHECK CHECK CHECK
+    if (data2 == 'j') //j e raspunsul primit la intrebarea u                //check
+    {
+      brake();
+    }
+    /*arduino2.end();
+    delay(20);    asta foloseam la controlul manual, ca sa curat bufferul, acum nu vrem sa se piarda date
+    arduino2.begin(baud);*/
+  }
+
+
+}
