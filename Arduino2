@@ -1,0 +1,476 @@
+#include <SoftwareSerial.h>
+#include <MPU6050_tockn.h>
+#include<Wire.h>
+#include<String.h>
+
+MPU6050 mpu6050(Wire);
+long timer = 0;
+
+int ThermistorPin = A7;
+int Vo;
+float R1 = 10000; // value of R1 on board
+float logR2, R2, T;
+float c1 = 0.001129148, c2 = 0.000234125, c3 = 0.0000000876741; //steinhart-hart coeficients for thermistor
+float rotX = 0.0, rotY = 0.0, rotZ = 0.0, caseTemp = 0.0;
+int VoltagePin = A6;
+int sensorValue = 0;
+float voltage = 0.0;
+int battery = 0; //0-100 percentage
+int turbineRPM = 4000;
+
+int distanceBasedOnSpeed = 100; //1:50 2:100 3:200 4:300 5:450 6:600
+        
+                           SoftwareSerial debugSerial(3 , 2); //RX, TX
+int baud = 19200;
+
+char data = 0;
+/*
+   w = forward
+   a = left
+   d = right
+   s = brake/reverse
+   x = brake only
+   z = neutral (steering)
+   0-9 = speed control
+*/
+int goingForward = 0;
+int goingBack = 0;
+bool sensorsConnected = false;
+
+long duration1 = 1;
+int distance1 = 10;
+long duration2 = 1;
+int distance2 = 10;
+long duration3 = 1;
+int distance3 = 10;
+int engineTemp = 1;
+
+const int trigPin1 = 12;
+const int echoPin1 = 11;
+const int trigPin2 = 8;
+const int echoPin2 = 7; 
+const int trigPin3 = 10;  
+const int echoPin3 = 9;  
+
+const int buttonPin = 4;
+int buttonState = 0;
+
+void measureVoltage() {
+  int voltageInt = 0;
+  sensorValue = analogRead(A6);
+  voltage = sensorValue * (5.0 / 1023.0);
+  //debugSerial.println(voltage);
+  voltageInt = int(voltage * 10);
+  //Battery min = 30 , Battery max = 46 (NETESTAT)
+  battery = voltageInt; //BATTERY acum returneaza direct voltajul masurat, nu mai face MAP la procent
+}
+
+void measureTemp() {
+  Vo = analogRead(ThermistorPin);
+  R2 = R1 * (1023.0 / (float)Vo - 1.0); //calculate resistance on thermistor
+  logR2 = log(R2);
+  T = (1.0 / (c1 + c2 * logR2 + c3 * logR2 * logR2 * logR2)); // temperature in Kelvin
+  T = T - 273.15; //convert Kelvin to Celcius
+  engineTemp = T;
+  /*debugSerial.print("Engine Temp: ");
+  debugSerial.print(T);
+  debugSerial.println(" C");*/
+}
+
+void measure1() { //front left
+  digitalWrite(trigPin1, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin1, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin1, LOW);
+  duration1 = pulseIn(echoPin1, HIGH);
+  distance1 = duration1 * 0.034 / 2;
+  //delay(50);
+}
+void measure2() { //front right
+  digitalWrite(trigPin2, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin2, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin2, LOW);
+  duration2 = pulseIn(echoPin2, HIGH);
+  distance2 = duration2 * 0.034 / 2;
+  //delay(50);
+}
+void measure3() { //BACK SENSOR
+  digitalWrite(trigPin3, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigPin3, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(trigPin3, LOW);
+  duration3 = pulseIn(echoPin3, HIGH);
+  distance3 = duration3 * 0.034 / 2;
+  //delay(50);
+}
+
+void stopIfRunning() {
+  Serial.write('u'); //u intreaba daca merge in fata                   //check
+  data = Serial.read();
+  if (data == 'y')
+  {
+    goingForward = 1;
+  } else if (data == 'n') {
+    goingForward = 0;
+  }
+  if (goingForward == 1)
+  {
+    Serial.write('j');  //j e raspunsul primit la intrebarea u
+  }
+}
+
+void stopIfGoingBack() {
+  Serial.write('U'); //U intreaba daca merge in spate                          //check
+  data = Serial.read();
+  if (data == 'Y')
+  {
+    goingBack = 1;
+  } else if (data == 'N') {
+    goingBack = 0;
+  }
+  if (goingBack == 1)
+  {
+    Serial.write('J');  //J e raspunsul primit la intrebarea U
+  }
+}
+
+void blinkInternal() {
+
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(100);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(100);
+  digitalWrite(LED_BUILTIN, LOW);
+  delay(100);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(100);
+  digitalWrite(LED_BUILTIN, LOW);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(400);
+  digitalWrite(LED_BUILTIN, LOW);
+}
+
+void measureAccelerometer() {
+  debugSerial.println("\Measuring..");
+  mpu6050.update();
+
+  /*if(millis() - timer > 1000){
+
+    Serial.println("=======================================================");
+    //Serial.print("temp : ");Serial.println(mpu6050.getTemp());
+    Serial.print("accX : ");Serial.print(mpu6050.getAccX());
+    Serial.print("\taccY : ");Serial.print(mpu6050.getAccY());
+    Serial.print("\taccZ : ");Serial.println(mpu6050.getAccZ());
+
+    Serial.print("gyroX : ");Serial.print(mpu6050.getGyroX());
+    Serial.print("\tgyroY : ");Serial.print(mpu6050.getGyroY());
+    Serial.print("\tgyroZ : ");Serial.println(mpu6050.getGyroZ());
+
+    Serial.print("accAngleX : ");Serial.print(mpu6050.getAccAngleX());
+    Serial.print("\taccAngleY : ");Serial.println(mpu6050.getAccAngleY());
+
+    Serial.print("gyroAngleX : ");Serial.print(mpu6050.getGyroAngleX());
+    Serial.print("\tgyroAngleY : ");Serial.print(mpu6050.getGyroAngleY());
+    Serial.print("\tgyroAngleZ : ");Serial.println(mpu6050.getGyroAngleZ());
+
+    Serial.print("angleX : ");Serial.print(mpu6050.getAngleX());
+    Serial.print("\tangleY : ");Serial.print(mpu6050.getAngleY());
+    Serial.print("\tangleZ : ");Serial.println(mpu6050.getAngleZ());
+    Serial.println("=======================================================\n");
+    timer = millis();
+
+    }*/
+
+}
+
+
+void setup() {
+  // initialize the pushbutton pin as an input:
+  pinMode(buttonPin, INPUT);
+
+  /*Wire.begin();
+
+  mpu6050.begin();
+  mpu6050.calcGyroOffsets(true);
+  */
+  
+
+  Serial.begin(baud);
+  pinMode(trigPin1, OUTPUT);
+  pinMode(echoPin1, INPUT);
+  pinMode(trigPin2, OUTPUT);
+  pinMode(echoPin2, INPUT);
+  pinMode(trigPin3, OUTPUT);
+  pinMode(echoPin3, INPUT);
+  // put your setup code here, to run once:
+  pinMode(LED_BUILTIN, OUTPUT);
+  debugSerial.begin(baud);
+  //Serial.print("Serial on!");
+  delay(300);
+  digitalWrite(LED_BUILTIN, HIGH);
+  delay(1000);
+  digitalWrite(LED_BUILTIN, LOW);
+
+  blinkInternal();
+  measure1();
+  measure2();
+  delay(50);
+  measure1();
+  measure2();
+  delay(150);
+  measure1();
+  delay(50);
+  measure2(); // am repetat masuratoarea ca debug ca mereu returneaza sensorsconnected = false la inceput si nu stiu de ce
+  
+  if (distance1 >= 1 && distance2 >= 1)                     //check
+    sensorsConnected = true;
+  else
+    sensorsConnected = false; // ONLY FOR DEBUG, set it to FALSE afterwards
+    
+  //debugSerial.println("Arduino2 ONLINE");
+
+  debugSerial.println("y");
+    
+    if (sensorsConnected){
+    debugSerial.println("sensors CONNECTED!");}
+    else{
+    debugSerial.println("sensors NOT CONNECTED!");}
+}
+
+/*void measureButton() {              //DEPRECATED
+  buttonState = digitalRead(buttonPin);
+
+  // check if the pushbutton is pressed. If it is, the buttonState is HIGH:
+  if (buttonState == HIGH) {
+    //m e comanda pentru a stinge releul
+    Serial.write('m');
+  } //else {
+  //n e comanda pentru a reaprinde releul
+  //Serial.write('n');
+  //}
+} */
+
+void writeString(String stringData) { // Used to serially push out a String with Serial.write()     //DEPRECATED
+
+  for (int i = 0; i < stringData.length(); i++)
+  {
+    Serial.write(stringData[i]);   // Push each char 1 by 1 on each loop pass
+  }
+
+}// end writeString
+
+int k=2; // k=1 MODIFY!
+
+void loop() {
+
+  if(k==1)
+  { 
+    measure1();
+    k=2;
+  }
+  else if(k==2)
+  {
+   measure2();
+   k=3; 
+   }
+  else if(k==3)
+  {
+   measure3();
+   k=2; // k=1 MODIFY!
+  }
+
+  /*
+  measure1();
+  measure2();
+  measure3();*/
+
+  
+  //measureAccelerometer();
+  measureTemp();
+  measureVoltage();
+  //measureButton(); DEPRECATED
+
+  // put your main code here, to run repeatedly:
+  data = 'x';
+
+  if (sensorsConnected == true) {             //check
+    /*if (distance1 <= distanceBasedOnSpeed)  //JUST FOR ONE SENSOR DEBUG, REMOVE COMMENDS AFTER
+    {
+      stopIfRunning();
+    }
+    else*/ if (distance2 <= distanceBasedOnSpeed)
+    {
+      stopIfRunning();
+    }
+    if (distance3 <= 100)
+    {
+      stopIfGoingBack();
+    }
+
+    /*if (distance1 > distanceBasedOnSpeed)
+    {
+      
+    }
+    else if (distance2 > distanceBasedOnSpeed)
+    {
+      
+    }*/
+    
+  }
+
+
+  //Serial.listen();
+  if (Serial.available() > 0)            //check
+  {
+    data = Serial.read();
+    if (data == 'c')
+    {
+      if (sensorsConnected == true)
+      {
+        if (/*distance1 > distanceBasedOnSpeed &&*/ distance2 > distanceBasedOnSpeed) //JUST FOR ONE SENSOR DEBUG, REMOVE COMMENDS AFTER
+          Serial.write('i');
+        else
+          Serial.write('o');
+        /*Serial.end();
+          delay(30);
+          Serial.begin(baud);*/
+      }
+      else if (sensorsConnected == false) {
+        Serial.write ('i');
+        /*Serial.end();
+          delay(30);
+          Serial.begin(baud);*/
+      }
+    }
+
+    else if (data == 'z')
+    {
+      if (sensorsConnected == true)
+      {
+        if (distance3 > 100)
+          Serial.write('l');
+        else
+          Serial.write('k');
+        /*Serial.end();
+          delay(30);
+          Serial.begin(baud);*/
+      }
+      else if (sensorsConnected == false) {
+        Serial.write ('i');
+        /*Serial.end();
+          delay(30);
+          Serial.begin(baud);*/
+      }
+    }
+
+    else if (data == '1') {   //seteaza distanta de detectie a obstacolului in functie de viteza
+      distanceBasedOnSpeed = 60; //1:100 2:150 3:200 4:300 5:450 6:600
+    }
+    else if (data == '2') {
+      distanceBasedOnSpeed = 90;
+    }
+    else if (data == '3') {
+      distanceBasedOnSpeed = 200;
+    }
+    else if (data == '4') {
+      distanceBasedOnSpeed = 300;
+    }
+    else if (data == '5') {
+      distanceBasedOnSpeed = 450;
+    }
+    else if (data == '6') {
+      distanceBasedOnSpeed = 500;
+    }
+    else if (data == '7') {
+      distanceBasedOnSpeed = 600;
+    }
+    else if (data == '8') {
+      distanceBasedOnSpeed = 600;
+    }
+    else if (data == '9') {
+      distanceBasedOnSpeed = 600;
+    }
+    else if (data == '*') { 
+      sensorsConnected = false;
+    }
+    else if (data == '@') { 
+      sensorsConnected = true;
+    }
+
+
+    else if (data == 'h') //request for sensorData from arduino1  //DEPRECATED
+    {
+     // writeString(dat);
+    }
+  }
+
+      //enginetemp distance1,2,3 battery, sensorsConnected, rotx,y,z, caseTemp, goingForward, turbineRPM, distanceBasedOnSpeed
+    //debugSerial.println(dat);
+    
+   // debugSerial.println(" ");
+    
+    debugSerial.print("engineTemp:");
+    debugSerial.print(engineTemp);
+    debugSerial.println(" ");
+    
+    debugSerial.print("distance1:");
+    debugSerial.print(distance1);
+    debugSerial.println(" ");
+    
+    debugSerial.print("distance2:");
+    debugSerial.print(distance2);
+    debugSerial.println(" ");
+    
+    debugSerial.print("distance3:");
+    debugSerial.print(distance3);
+    debugSerial.println(" ");
+    
+    debugSerial.print("battery:");
+    debugSerial.print(battery);
+    debugSerial.println(" ");
+        
+    debugSerial.print("sensorsConnected:");
+    debugSerial.print(sensorsConnected);
+    debugSerial.println(" ");
+
+    /*debugSerial.print("(rotX: ");
+    debugSerial.print(rotX);
+    debugSerial.println(")");
+    
+    debugSerial.print("(rotY: ");
+    debugSerial.print(rotY);
+    debugSerial.println(")");
+    
+    debugSerial.print("(rotZ: ");
+    debugSerial.print(rotZ);
+    debugSerial.println(")");*/
+    
+    //debugSerial.print("caseTemp: ");
+    //debugSerial.print(caseTemp);
+    //debugSerial.println(")");
+    
+    //debugSerial.print("turbineRPM: ");
+    //debugSerial.print(turbineRPM);
+    //debugSerial.println(")");
+    
+    debugSerial.print("distanceBasedOnSpeed:");
+    debugSerial.print(distanceBasedOnSpeed);
+    debugSerial.println(" ");
+    
+    debugSerial.print("goingForward:");
+    debugSerial.print(goingForward);
+    debugSerial.println(" ");
+    
+    debugSerial.print("goingBack:");
+    debugSerial.println(goingBack);
+    //debugSerial.println(" $ ");
+    //debugSerial.println("$");
+    /*debugSerial.println(" ");*/  /*Functia din versiunea anterioara mergea perfect dar umplea memoria la arduino si se bloca dupa cateva minute
+    asa ca am decis sa renunt complet si sa ne folosim de debugSerial, raspberry-ul va fi legat la el si acum nu va mai putea primi mesaje
+    de la arduino1 ci doar de la arduino2*/
+  
+}
